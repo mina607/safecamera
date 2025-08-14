@@ -1,3 +1,4 @@
+0813
 safecamera
 =============
 yeonhee miniproject
@@ -14,3 +15,6 @@ yeonhee miniproject
 
 ## 개선점
 - opencv, yolo, openpose의 기술을 활용하여 특정 행동을 잘 인식하도록 개선한다
+
+0814
+======
