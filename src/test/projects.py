@@ -1,61 +1,75 @@
 import cv2
+import mediapipe as mp
+import time
 import numpy as np
 
-# 템플릿 이미지 3개 불러오기
-template1 = cv2.imread('../../../img/capture1.png', 0)
-if template1 is None:
-    print("capture1.png 파일을 읽을 수 없습니다.")
-template2 = cv2.imread('../../../img/capture2.png', 0)
-if template2 is None:
-    print("capture2.png 파일을 읽을 수 없습니다.")
-template3 = cv2.imread('../../../img/capture3.png', 0)
-if template3 is None:
-    print("capture3.png 파일을 읽을 수 없습니다.")
+# MediaPipe 손 인식 초기화
+mp_hands = mp.solutions.hands
+mp_draw = mp.solutions.drawing_utils
+hands = mp_hands.Hands(max_num_hands=1)
 
-templates = [template1, template2, template3]
-threshold = 0.7
+# 손 위치 추적용 변수
+prev_position = None
+still_start_time = None
+STILL_THRESHOLD = 20      # 정지 판단 거리 (픽셀)
+STILL_TIME_LIMIT = 3      # 정지 지속 시간 (초)
 
 cap = cv2.VideoCapture(0)
 
 while True:
     ret, frame = cap.read()
+    if not ret:
+        break
 
-    if not ret or frame is None:
-        # 검은 화면 만들기
-        frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        # 메시지 띄우기
-        cv2.putText(frame, "No camera detected", (50, 50),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-        cv2.imshow('Risk Detection', frame)
+    frame = cv2.flip(frame, 1)
+    img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    result = hands.process(img_rgb)
 
-        # q 누르면 종료
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-        # 카메라가 안 잡히면 계속 여기서 대기
-        continue
-
-    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    height, width, _ = frame.shape
     danger_detected = False
 
-    for template in templates:
-        if template is None:
-            continue
+    # 기준선 위치 (하단 25%)
+    danger_line_y = int(height * 0.75)
 
-        w, h = template.shape[::-1]
-        res = cv2.matchTemplate(gray_frame, template, cv2.TM_CCOEFF_NORMED)
-        loc = np.where(res >= threshold)
+    # 기준선 표시 (노란색)
+    cv2.line(frame, (0, danger_line_y), (width, danger_line_y), (0, 255, 255), 2)
+    cv2.putText(frame, "Danger Zone Below", (10, danger_line_y - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
-        if len(loc[0]) > 0:
-            danger_detected = True
-            pt = (loc[1][0], loc[0][0])
-            cv2.rectangle(frame, pt, (pt[0] + w, pt[1] + h), (0, 0, 255), 2)
-            break
+    if result.multi_hand_landmarks:
+        for hand_landmarks in result.multi_hand_landmarks:
+            wrist = hand_landmarks.landmark[0]  # 손목 좌표
+            cx, cy = int(wrist.x * width), int(wrist.y * height)
 
-    if danger_detected:
-        cv2.putText(frame, "🚨 위험 행동 감지!", (10, 50),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            # [1] 손이 기준선 아래로 내려갔는지 확인
+            if cy > danger_line_y:
+                danger_detected = True
+                cv2.putText(frame, "Danger: Hand too low!", (10, 50),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                # 손목 위치에 빨간 원
+                cv2.circle(frame, (cx, cy), 15, (0, 0, 255), -1)
 
-    cv2.imshow('Risk Detection', frame)
+            # [2] 손이 너무 오래 멈췄는지 확인
+            if prev_position:
+                dist = np.linalg.norm(np.array(prev_position) - np.array((cx, cy)))
+                if dist < STILL_THRESHOLD:
+                    if still_start_time is None:
+                        still_start_time = time.time()
+                    elif time.time() - still_start_time > STILL_TIME_LIMIT:
+                        danger_detected = True
+                        cv2.putText(frame, "Danger: Hand not moving!", (10, 100),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                else:
+                    still_start_time = None  # 움직였으면 초기화
+            prev_position = (cx, cy)
+
+            # 손 관절 그리기
+            mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+    else:
+        prev_position = None
+        still_start_time = None
+
+    cv2.imshow("Risk Behavior Detection", frame)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
